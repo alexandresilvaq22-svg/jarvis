@@ -17,6 +17,12 @@ app.mount("/public", StaticFiles(directory="public"), name="public")
 async def root():
     with open("public/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+    
+    @app.get("/reset")
+async def reset():
+    if os.path.exists("jarvis_memory.db"):
+        os.remove("jarvis_memory.db")
+    return {"status": "Memoria limpa!"}
 
 @app.get("/reset")
 async def reset():
