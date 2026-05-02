@@ -24,13 +24,6 @@ async def reset():
         os.remove("jarvis_memory.db")
     return {"status": "Memoria limpa!"}
 
-@app.get("/reset")
-async def reset():
-    import os
-    if os.path.exists("jarvis_memory.db"):
-        os.remove("jarvis_memory.db")
-    return {"status": "Memória limpa com sucesso!"}
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
