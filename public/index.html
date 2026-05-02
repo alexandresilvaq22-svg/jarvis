@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>J.A.R.V.I.S.</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body {
+  background:#000;
+  color:#00d4ff;
+  font-family:'Courier New',monospace;
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  overflow:hidden;
+  user-select:none;
+}
+#header {
+  padding:16px;
+  font-size:18px;
+  letter-spacing:6px;
+  text-shadow:0 0 20px #00d4ff;
+  border-bottom:1px solid #00d4ff33;
+  width:100%;
+  text-align:center;
+}
+#orb-container { margin:20px 0 10px; position:relative; }
+#orb {
+  width:150px; height:150px;
+  border-radius:50%;
+  border:2px solid #00d4ff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 0 30px #00d4ff55;
+  transition:all 0.3s;
+  cursor:pointer;
+}
+#orb.listening { border-color:#ff4444; box-shadow:0 0 50px #ff444488; animation:pulse 1s infinite; }
+#orb.speaking  { border-color:#44ff88; box-shadow:0 0 50px #44ff8888; animation:pulse 0.6s infinite; }
+#orb.thinking  { border-color:#ffaa00; box-shadow:0 0 50px #ffaa0088; animation:spin 2s linear infinite; }
+@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.06)} }
+@keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+#orb-inner {
+  width:110px; height:110px;
+  border-radius:50%;
+  background:radial-gradient(circle,#00d4ff22,#000);
+  border:1px solid #00d4ff44;
+  display:flex; align-items:center; justify-content:center;
+  font-size:36px;
+}
+#status { font-size:11px; letter-spacing:3px; color:#00d4ff77; margin:8px 0 12px; }
+#chat {
+  flex:1; width:100%; max-width:420px;
+  overflow-y:auto; padding:0 16px;
+  display:flex; flex-direction:column; gap:8px;
+}
+.msg { padding:10px 12px; border-radius:10px; font-size:13px; line-height:1.5; max-width:90%; }
+.msg.user  { background:#00d4ff11; border-left:3px solid #00d4ff; align-self:flex-end; }
+.msg.jarvis{ background:#44ff8811; border-left:3px solid #44ff88; color:#44ff88; align-self:flex-start; }
+.msg.system{ background:#ffaa0011; border-left:3px solid #ffaa00; color:#ffaa00; align-self:center; font-size:11px; }
+#controls {
+  width:100%; padding:12px 20px 24px;
+  display:flex; gap:10px; align-items:center; justify-content:center;
+}
+#mic-btn {
+  width:70px; height:70px;
+  border-radius:50%;
+  background:transparent;
+  border:2px solid #00d4ff;
+  color:#00d4ff;
+  font-size:28px;
+  cursor:pointer;
+  transition:all 0.2s;
+  display:flex; align-items:center; justify-content:center;
+}
+#mic-btn.active { background:#ff444422; border-color:#ff4444; color:#ff4444; }
+#text-input {
+  flex:1;
+  background:#00d4ff11;
+  border:1px solid #00d4ff44;
+  color:#00d4ff;
+  padding:12px;
+  border-radius:25px;
+  font-family:'Courier New',monospace;
+  font-size:14px;
+  outline:none;
+}
+#text-input::placeholder { color:#00d4ff44; }
+#send-btn {
+  width:44px; height:44px;
+  border-radius:50%;
+  background:transparent;
+  border:1px solid #00d4ff;
+  color:#00d4ff;
+  font-size:18px;
+  cursor:pointer;
+}
+</style>
+</head>
+<body>
+
+<div id="header">J.A.R.V.I.S.</div>
+
+<div id="orb-container">
+  <div id="orb" onclick="toggleMic()">
+    <div id="orb-inner">🤖</div>
+  </div>
+</div>
+
+<div id="status">INICIALIZANDO...</div>
+<div id="chat"></div>
+
+<div id="controls">
+  <button id="mic-btn" onclick="toggleMic()">🎤</button>
+  <input id="text-input" type="text" placeholder="Digite um comando..." 
+         onkeydown="if(event.key==='Enter') sendText()">
+  <button id="send-btn" onclick="sendText()">➤</button>
+</div>
+
+<script>
+// ─── Configuração ───────────────────────────────────────────
+const WS_URL = window.location.protocol === 'https:' 
+  ? `wss://${window.location.host}/ws` 
+  : `ws://${window.location.host}/ws`;
+
+// Mapa de apps para Intent URLs do Android
+const APP_INTENTS = {
+  calculadora:    'intent:///#Intent;scheme=android-app;package=com.google.android.calculator;end',
+  whatsapp:       'whatsapp://send',
+  camera:         'intent:///#Intent;scheme=android-app;package=com.android.camera2;end',
+  youtube:        'vnd.youtube://',
+  maps:           'geo:0,0',
+  configuracoes:  'intent://settings#Intent;scheme=android-app;package=com.android.settings;end',
+  chrome:         'googlechrome://',
+  spotify:        'spotify://',
+  instagram:      'instagram://',
+  telegram:       'tg://',
+  gmail:          'googlegmail://',
+  fotos:          'content://media/internal/images/media',
+};
+
+// ─── WebSocket ───────────────────────────────────────────────
+let ws;
+let mediaRecorder;
+let isRecording = false;
+let audioChunks = [];
+
+let welcomed = false;
+
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => setStatus('ONLINE', '');
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    handleMessage(data);
+  };
+
+  ws.onclose = () => {
+    setStatus('RECONECTANDO...', '');
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function handleMessage(data) {
+  if (data.type === 'status') {
+    setStatus(data.message.toUpperCase(), 'thinking');
+    return;
+  }
+  if (data.type === 'transcription') {
+    addMsg(data.text, 'user');
+    return;
+  }
+  if (data.type === 'welcome') {
+    if (welcomed) return;
+    welcomed = true;
+    setStatus('AGUARDANDO COMANDO', '');
+    addMsg(data.text, 'jarvis');
+    playAudio(data.audio);
+    return;
+  }
+  if (data.type === 'response') {
+    setStatus('AGUARDANDO COMANDO', '');
+    addMsg(data.text, 'jarvis');
+    playAudio(data.audio);
+    if (data.actions?.length) handleActions(data.actions);
+  }
+}
+
+// ─── Ações (abrir apps) ──────────────────────────────────────
+function handleActions(actions) {
+  actions.forEach(action => {
+    if (action.type === 'open_app') {
+      openApp(action.app);
+    }
+    if (action.type === 'search') {
+      openSearch(action.query, action.engine);
+    }
+  });
+}
+
+function openApp(appName) {
+  const apps = {
+    calculadora:   'calculator://',
+    whatsapp:      'https://web.whatsapp.com',
+    camera:        null,
+    youtube:       'https://youtube.com',
+    maps:          'https://maps.google.com',
+    configuracoes: null,
+    spotify:       'https://open.spotify.com',
+    instagram:     'https://instagram.com',
+    telegram:      'https://web.telegram.org',
+    gmail:         'https://gmail.com',
+    netflix:       'https://netflix.com',
+    github:        'https://github.com',
+  };
+
+  const url = apps[appName.toLowerCase()];
+  if (url) {
+    addMsg(`⚡ Abrindo ${appName}...`, 'system');
+    window.open(url, '_blank');
+  } else {
+    addMsg(`⚠️ Não consigo abrir "${appName}" no computador`, 'system');
+  }
+}
+
+function openSearch(query, engine = 'google') {
+  const engines = {
+    google:  `https://google.com/search?q=${encodeURIComponent(query)}`,
+    youtube: `https://youtube.com/results?search_query=${encodeURIComponent(query)}`,
+    maps:    `https://maps.google.com/search?q=${encodeURIComponent(query)}`,
+  };
+  const url = engines[engine] || engines.google;
+  addMsg(`🔍 Pesquisando: ${query}`, 'system');
+  window.open(url, '_blank');
+}
+
+// ─── Gravação de áudio ───────────────────────────────────────
+async function toggleMic() {
+  if (isRecording) stopRecording();
+  else await startRecording();
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.onstop = sendAudio;
+    mediaRecorder.start();
+
+    isRecording = true;
+    document.getElementById('mic-btn').classList.add('active');
+    document.getElementById('mic-btn').textContent = '⏹';
+    setStatus('OUVINDO...', 'listening');
+  } catch(e) {
+    addMsg('⚠️ Permita acesso ao microfone', 'system');
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    isRecording = false;
+    document.getElementById('mic-btn').classList.remove('active');
+    document.getElementById('mic-btn').textContent = '🎤';
+    setStatus('PROCESSANDO...', 'thinking');
+  }
+}
+
+async function sendAudio() {
+  const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  const reader = new FileReader();
+  reader.onload = () => {
+    const base64 = reader.result.split(',')[1];
+    ws.send(JSON.stringify({ type: 'audio', audio: base64 }));
+  };
+  reader.readAsDataURL(blob);
+}
+
+// ─── Texto ───────────────────────────────────────────────────
+function sendText() {
+  const input = document.getElementById('text-input');
+  const text = input.value.trim();
+  if (!text || !ws) return;
+  input.value = '';
+  ws.send(JSON.stringify({ type: 'text', text }));
+}
+
+// ─── Áudio de resposta ───────────────────────────────────────
+function playAudio(base64) {
+  setStatus('RESPONDENDO...', 'speaking');
+  
+  // Para qualquer áudio anterior
+  window.speechSynthesis.cancel();
+  
+  const audio = new Audio(`data:audio/mp3;base64,${base64}`);
+  audio.onended = () => setStatus('AGUARDANDO COMANDO', '');
+  audio.onerror = (e) => {
+    console.error('Erro no áudio:', e);
+    setStatus('AGUARDANDO COMANDO', '');
+  };
+  
+  const playPromise = audio.play();
+  if (playPromise !== undefined) {
+    playPromise.catch(err => {
+      console.error('Play falhou:', err);
+      setStatus('AGUARDANDO COMANDO', '');
+    });
+  }
+}
+
+// ─── UI Helpers ──────────────────────────────────────────────
+function setStatus(text, state) {
+  document.getElementById('status').textContent = text;
+  document.getElementById('orb').className = state || '';
+}
+
+function addMsg(text, who) {
+  const chat = document.getElementById('chat');
+  const div = document.createElement('div');
+  div.className = `msg ${who}`;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// ─── Init ────────────────────────────────────────────────────
+connectWS();
+</script>
+</body>
+</html>
