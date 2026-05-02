@@ -7,6 +7,7 @@ import os
 load_dotenv()
 
 from brain import process_command
+from brain import process_command
 from voice import text_to_audio_base64
 
 app = FastAPI(title="J.A.R.V.I.S.")
