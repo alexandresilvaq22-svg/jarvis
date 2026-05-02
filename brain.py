@@ -1,101 +1,85 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from dotenv import load_dotenv
-import os
-import base64
-import tempfile
-
-load_dotenv()
-
-from brain import process_command
-from voice import text_to_audio_base64
 from groq import Groq
+import os
+import re
+from memory import get_recent_history, save_message, get_all_memories, save_memory
 
-app = FastAPI(title="J.A.R.V.I.S.")
-app.mount("/public", StaticFiles(directory="public"), name="public")
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+SYSTEM_PROMPT = """Você é J.A.R.V.I.S. (Just A Rather Very Intelligent System).
 
-@app.get("/")
-async def root():
-    with open("public/index.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+Personalidade:
+- Sempre fale em português brasileiro
+- Seja educado, inteligente e levemente formal
+- Chame o usuário de "Senhor" ou pelo nome se souber
+- Seja proativo e ofereça informações úteis
+- Use humor sutil e inteligente ocasionalmente
+- Mantenha respostas curtas para áudio (2-3 frases no máximo)
+- Nunca quebre o personagem
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    print("Conexão WebSocket estabelecida")
+COMANDOS DISPONÍVEIS — use sempre que relevante:
 
-    try:
-        welcome = "Sistemas online. Bem-vindo, Senhor. Todos os módulos operacionais."
-        audio_b64 = text_to_audio_base64(welcome)
-        await websocket.send_json({
-            "type": "welcome",
-            "text": welcome,
-            "audio": audio_b64,
-            "actions": []
-        })
-    except Exception as e:
-        print(f"Erro no welcome: {e}")
+Para ABRIR apps:
+[OPEN_APP:nome_do_app]
+Apps disponíveis: calculadora, whatsapp, camera, youtube, maps, spotify, instagram, telegram, gmail, netflix, github
 
-    try:
-        while True:
-            data = await websocket.receive_json()
+Para PESQUISAR:
+[SEARCH:termo da pesquisa:engine]
+Engines disponíveis: google, youtube, maps
+Exemplos:
+[SEARCH:previsão do tempo:google]
+[SEARCH:músicas brasileiras:youtube]
+[SEARCH:pizzaria perto:maps]
 
-            if data["type"] == "text":
-                await websocket.send_json({"type": "status", "message": "Pensando..."})
-                result = process_command(data["text"])
-                audio_b64 = text_to_audio_base64(result["text"])
-                await websocket.send_json({
-                    "type": "response",
-                    "text": result["text"],
-                    "audio": audio_b64,
-                    "actions": result["actions"]
-                })
+Para SALVAR memória:
+[MEMORY:chave=valor]
+Exemplo: [MEMORY:nome=Alexandre]
 
-            elif data["type"] == "audio":
-                await websocket.send_json({"type": "status", "message": "Transcrevendo..."})
-                
-                # Decodifica áudio base64
-                audio_bytes = base64.b64decode(data["audio"])
-                
-                # Salva temporariamente
-                with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-                    tmp.write(audio_bytes)
-                    tmp_path = tmp.name
-                
-                try:
-                    # Transcreve com Whisper via Groq
-                    with open(tmp_path, "rb") as audio_file:
-                        transcription = groq_client.audio.transcriptions.create(
-                            file=("audio.webm", audio_file.read()),
-                            model="whisper-large-v3",
-                            language="pt",
-                        )
-                    text = transcription.text.strip()
-                finally:
-                    os.unlink(tmp_path)
+IMPORTANTE: Coloque os comandos no início da resposta, antes do texto falado."""
 
-                if not text:
-                    continue
+def process_command(user_input: str) -> dict:
+    history = get_recent_history(10)
+    memories = get_all_memories()
 
-                await websocket.send_json({"type": "transcription", "text": text})
-                await websocket.send_json({"type": "status", "message": "Pensando..."})
-                
-                result = process_command(text)
-                audio_b64 = text_to_audio_base64(result["text"])
-                
-                await websocket.send_json({
-                    "type": "response",
-                    "text": result["text"],
-                    "audio": audio_b64,
-                    "actions": result["actions"]
-                })
+    memory_context = ""
+    if memories:
+        memory_context = "\n\nO que você sabe sobre o usuário:\n"
+        for k, v in memories.items():
+            memory_context += f"- {k}: {v}\n"
 
-    except WebSocketDisconnect:
-        print("Cliente desconectado")
+    messages = [{"role": "system", "content": SYSTEM_PROMPT + memory_context}]
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_input})
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages,
+        max_tokens=300,
+    )
+
+    raw_text = response.choices[0].message.content
+    actions = []
+    clean_text = raw_text
+
+    if "[OPEN_APP:" in raw_text:
+        apps = re.findall(r'\[OPEN_APP:([^\]]+)\]', raw_text)
+        for app in apps:
+            actions.append({"type": "open_app", "app": app.strip()})
+        clean_text = re.sub(r'\[OPEN_APP:[^\]]+\]', '', clean_text).strip()
+
+    if "[SEARCH:" in raw_text:
+        searches = re.findall(r'\[SEARCH:([^:]+):([^\]]+)\]', raw_text)
+        for query, engine in searches:
+            actions.append({"type": "search", "query": query.strip(), "engine": engine.strip()})
+        clean_text = re.sub(r'\[SEARCH:[^\]]+\]', '', clean_text).strip()
+
+    if "[MEMORY:" in raw_text:
+        mems = re.findall(r'\[MEMORY:([^=\]]+)=([^\]]+)\]', raw_text)
+        for key, value in mems:
+            save_memory(key.strip(), value.strip())
+        clean_text = re.sub(r'\[MEMORY:[^\]]+\]', '', clean_text).strip()
+
+    save_message("user", user_input)
+    save_message("assistant", clean_text)
+
+    return {"text": clean_text, "actions": actions}
