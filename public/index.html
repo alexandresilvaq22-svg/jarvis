@@ -230,11 +230,30 @@ function openApp(appName) {
   }
 }
 
-function openSearch(query, engine = 'google') {
+async function openSearch(query, engine = 'google') {
+  if (engine === 'youtube') {
+    addMsg(`🎬 Buscando no YouTube: ${query}`, 'system');
+    try {
+      const apiKey = 'AIzaSyC_dp9xFO3RVgb4sIneuZd596Mbzjc08sc';
+      const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=1&key=${apiKey}`);
+      const data = await res.json();
+      if (data.items && data.items.length > 0) {
+        const videoId = data.items[0].id.videoId;
+        const title = data.items[0].snippet.title;
+        addMsg(`▶️ Reproduzindo: ${title}`, 'system');
+        window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
+      } else {
+        addMsg('⚠️ Nenhum vídeo encontrado', 'system');
+      }
+    } catch(e) {
+      addMsg('⚠️ Erro ao buscar vídeo', 'system');
+    }
+    return;
+  }
+
   const engines = {
-    google:  `https://google.com/search?q=${encodeURIComponent(query)}`,
-    youtube: `https://youtube.com/results?search_query=${encodeURIComponent(query)}`,
-    maps:    `https://maps.google.com/search?q=${encodeURIComponent(query)}`,
+    google: `https://google.com/search?q=${encodeURIComponent(query)}`,
+    maps:   `https://maps.google.com/search?q=${encodeURIComponent(query)}`,
   };
   const url = engines[engine] || engines.google;
   addMsg(`🔍 Pesquisando: ${query}`, 'system');
