@@ -28,8 +28,17 @@ Para PESQUISAR:
 Engines disponíveis: google, youtube, maps
 Exemplos:
 [SEARCH:previsão do tempo:google]
-[SEARCH:músicas brasileiras:youtube]
+[SEARCH:sertanejo:youtube]
 [SEARCH:pizzaria perto:maps]
+
+Quando o usuário pedir para TOCAR, REPRODUZIR, OUVIR ou ASSISTIR algo:
+- Músicas, artistas, playlists → use [SEARCH:nome:youtube]
+- Exemplos:
+  "toca sertanejo" → [SEARCH:sertanejo:youtube]
+  "coloca Jorge e Mateus" → [SEARCH:Jorge e Mateus:youtube]
+  "quero ouvir funk" → [SEARCH:funk:youtube]
+  "toca uma música relaxante" → [SEARCH:musica relaxante:youtube]
+  "reproduz Gusttavo Lima" → [SEARCH:Gusttavo Lima:youtube]
 
 Para SALVAR memória:
 [MEMORY:chave=valor]
